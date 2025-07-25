@@ -25,6 +25,8 @@ URL_ALVO = os.getenv("URL_ALVO")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE")
 EMAIL_DESTINATARIO = os.getenv("EMAIL_DESTINATARIO")
 SENHA_EMAIL = os.getenv("SENHA_EMAIL")
+INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", "5"))  # Padrão: 5 minutos
+PULAR_TESTE_INICIAL = os.getenv("PULAR_TESTE_INICIAL", "false").lower() == "true"
 
 # Validar se todas as variáveis necessárias estão definidas
 required_vars = {
@@ -155,27 +157,48 @@ def teste_inicial():
     else:
         logging.error("[ERRO] Teste de conexão com o site: FALHOU")
     
-    # Teste de envio de e-mail (opcional)
-    resposta = input("Deseja testar o envio de e-mail? (s/n): ").lower().strip()
-    if resposta == 's':
-        logging.info("Testando envio de e-mail...")
+    # Enviar e-mail de teste automaticamente se ENVIAR_EMAIL_TESTE for True
+    enviar_teste = os.getenv("ENVIAR_EMAIL_TESTE", "false").lower() == "true"
+    
+    if enviar_teste:
+        logging.info("Enviando e-mail de teste automaticamente...")
         enviar_email_teste()
+    else:
+        # Tentar input interativo apenas se não estiver em ambiente servidor
+        try:
+            if os.isatty(0):  # Verifica se há terminal interativo
+                resposta = input("Deseja testar o envio de e-mail? (s/n): ").lower().strip()
+                if resposta == 's':
+                    logging.info("Testando envio de e-mail...")
+                    enviar_email_teste()
+            else:
+                logging.info("Ambiente não-interativo detectado - pulando teste de e-mail manual")
+        except (EOFError, OSError):
+            logging.info("Terminal não disponível - executando em modo servidor")
     
     logging.info("=== FIM DO TESTE ===\n")
 
 if __name__ == "__main__":
     try:
-        # Executar teste inicial
-        teste_inicial()
+        # Executar teste inicial apenas se não for pulado
+        if not PULAR_TESTE_INICIAL:
+            teste_inicial()
+        else:
+            logging.info("Teste inicial pulado - iniciando monitoramento direto")
         
-        # Agendar a verificação do site a cada 5 minutos
-        schedule.every(5).minutes.do(verificar_site)
+        # Agendar a verificação do site
+        schedule.every(INTERVALO_MINUTOS).minutes.do(verificar_site)
         
-        logging.info("Monitor iniciado. Verificando a cada 5 minutos...")
-        logging.info("Pressione Ctrl+C para parar")
+        logging.info(f"Monitor iniciado. Verificando a cada {INTERVALO_MINUTOS} minutos...")
+        logging.info("Para parar: defina STOP_MONITOR=true nas variáveis de ambiente")
         
         # Loop principal para executar o agendamento
         while True:
+            # Verificar se deve parar (útil para Railway)
+            if os.getenv("STOP_MONITOR", "false").lower() == "true":
+                logging.info("Monitor interrompido via variável de ambiente STOP_MONITOR")
+                break
+                
             schedule.run_pending()
             time.sleep(60)  # Verificar a cada minuto se há tarefas pendentes
             
@@ -183,3 +206,7 @@ if __name__ == "__main__":
         logging.info("Monitor interrompido pelo usuário")
     except Exception as e:
         logging.error(f"Erro inesperado: {e}")
+        # Em ambiente servidor, não encerrar por erros menores
+        if not os.isatty(0):
+            logging.info("Continuando execução em ambiente servidor...")
+            time.sleep(30)  # Esperar antes de continuar
